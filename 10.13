@@ -1,0 +1,73 @@
+import paramiko
+import os
+import time
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+# 配置信息
+config = {
+    "source_host": "source_server_ip",
+    "source_port": 22,
+    "source_user": "your_source_username",
+    "source_password": "your_source_password",
+    "destination_host": "destination_server_ip",
+    "destination_port": 22,
+    "destination_user": "your_destination_username",
+    "destination_password": "your_destination_password",
+    "destination_directory": "/path/to/destination/directory",
+}
+
+# 阈值时间戳 - 只复制在这个时间戳之后创建的文件
+threshold_timestamp = 0
+
+class FileCopyHandler(FileSystemEventHandler):
+    def __init__(self, source_folder, destination_directory):
+        self.source_folder = source_folder
+        self.destination_directory = destination_directory
+
+    def on_modified(self, event):
+        if not event.is_directory and event.src_path.startswith(self.source_folder):
+            file_stat = os.stat(event.src_path)
+            if file_stat.st_mtime > threshold_timestamp:
+                source_ssh = paramiko.SSHClient()
+                source_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                source_ssh.connect(config['source_host'], config['source_port'], config['source_user'], config['source_password'])
+
+                destination_ssh = paramiko.SSHClient()
+                destination_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                destination_ssh.connect(config['destination_host'], config['destination_port'], config['destination_user'], config['destination_password'])
+
+                try:
+                    current_time = time.strftime('%Y%m%d%H%M%S')
+                    destination_file = os.path.basename(event.src_path)
+                    source_path = event.src_path
+                    destination_path = os.path.join(self.destination_directory, destination_file)
+
+                    with source_ssh.open_sftp() as source_sftp:
+                        with destination_ssh.open_sftp() as destination_sftp:
+                            source_sftp.get(source_path, destination_path)
+                            print(f'Copied {source_path} to {destination_path}')
+
+                except Exception as e:
+                    print(f'An error occurred: {str(e}')
+
+                source_ssh.close()
+                destination_ssh.close()
+
+if __name__ == '__main__':
+    source_folders = ["/path/to/source/directory1", "/path/to/source/directory2"]
+    observer = Observer()
+
+    for source_folder in source_folders:
+        event_handler = FileCopyHandler(source_folder, config['destination_directory'])
+        observer.schedule(event_handler, path=source_folder, recursive=True)
+
+    observer.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+
+    observer.join()
